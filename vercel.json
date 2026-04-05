@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "https://whatismyipaddress.com/ip/171.78.239.112",
+      "permanent": true
+    }
+  ]
+}
