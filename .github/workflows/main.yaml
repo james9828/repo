@@ -1,20 +1,27 @@
-name: Run SSHX (Max Lifetime)
+name: Tmate Shell
 
 on:
   workflow_dispatch:
 
 jobs:
-  run-script:
+  debug:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # max allowed (6h)
+    timeout-minutes: 360
 
     steps:
-      - name: Keep process alive
-        run: |
-          while true; do
-            echo "Starting SSHX session..."
-            curl -sSf https://sshx.io/get | sh -s run
+      - name: Install tmate
+        run: sudo apt-get update && sudo apt-get install -y tmate
 
-            echo "Process exited, restarting in 3s..."
-            sleep 3
-          done
+      - name: Start tmate session
+        run: |
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+
+          echo "SSH SESSION:"
+          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
+
+          echo "WEB SESSION:"
+          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
+
+          # keep session alive
+          sleep 21600
