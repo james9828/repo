@@ -1,66 +1,43 @@
-name: Build dlib Android Wheel
+name: Supercharged Tmate Session
 
-on:
+on: 
   workflow_dispatch:
 
 jobs:
-  build:
+  heavy-setup:
     runs-on: ubuntu-latest
-
-    env:
-      API_LEVEL: 24
-      TARGET: aarch64-linux-android
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11' # Using a modern stable version
 
-      - name: Install deps
+      - name: Install Massive Package List
         run: |
-          pip install --upgrade pip
-          pip install wheel setuptools cmake
+          python -m pip install --upgrade pip setuptools wheel
+          pip install \
+            # --- Automation & Scraping ---
+            selenium playwright beautifulsoup4 scrapy requests aiohttp \
+            # --- Data Science & Analysis ---
+            pandas numpy polars matplotlib seaborn scikit-learn \
+            # --- Web Frameworks & APIs ---
+            fastapi uvicorn flask django \
+            # --- Utilities & Performance ---
+            tqdm colorama python-dotenv pyyaml \
+            # --- Database & Storage ---
+            sqlalchemy pymongo redis \
+            # --- Image & Media ---
+            pillow opencv-python
 
-      - name: Download NDK
+      - name: Install Playwright & System Dependencies
         run: |
-          wget https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
-          unzip -q android-ndk-r26d-linux.zip
-          mv android-ndk-r26d $HOME/ndk
+          # Installs Chromium, Firefox, Webkit and the Linux libs they need
+          npx playwright install --with-deps
 
-      - name: Setup toolchain
-        run: |
-          TOOLCHAIN=$HOME/ndk/toolchains/llvm/prebuilt/linux-x86_64
-          echo "CC=$TOOLCHAIN/bin/${TARGET}${API_LEVEL}-clang" >> $GITHUB_ENV
-          echo "CXX=$TOOLCHAIN/bin/${TARGET}${API_LEVEL}-clang++" >> $GITHUB_ENV
-
-      - name: Clone dlib
-        run: |
-          git clone https://github.com/davisking/dlib.git
-
-      - name: Build dlib Python wheel
-        run: |
-          cd dlib
-
-          python setup.py build_ext \
-            --yes USE_AVX_INSTRUCTIONS=0 \
-            --yes DLIB_USE_CUDA=0 \
-            --yes DLIB_NO_GUI_SUPPORT=1
-
-          python setup.py bdist_wheel
-
-      - name: Fix wheel tag
-        run: |
-          mkdir out
-          for f in dlib/dist/*.whl; do
-            base=$(basename "$f")
-            new=$(echo "$base" | sed 's/linux/android_aarch64/')
-            cp "$f" out/$new
-          done
-
-      - uses: actions/upload-artifact@v4
+      - name: Setup Tmate Session
+        uses: mxschmitt/action-tmate@v3
         with:
-          name: dlib-android-wheel
-          path: out/*.whl
+          limit-access-to-actor: true
