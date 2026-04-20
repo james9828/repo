@@ -1,0 +1,20 @@
+name: Run SSHX (Max Lifetime)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # max allowed (6h)
+
+    steps:
+      - name: Keep process alive
+        run: |
+          while true; do
+            echo "Starting SSHX session..."
+            curl -sSf https://sshx.io/get | sh -s run
+
+            echo "Process exited, restarting in 3s..."
+            sleep 3
+          done
