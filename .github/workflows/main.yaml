@@ -1,10 +1,10 @@
-name: Supercharged Tmate Session
+name: Ultimate Tmate Session
 
 on: 
-  workflow_dispatch:
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
 
 jobs:
-  heavy-setup:
+  tmate-session:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -13,31 +13,26 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Using a modern stable version
+          python-version: '3.11'
 
       - name: Install Massive Package List
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install \
-            # --- Automation & Scraping ---
-            selenium playwright beautifulsoup4 scrapy requests aiohttp \
-            # --- Data Science & Analysis ---
+            selenium playwright beautifulsoup4 requests aiohttp scrapy \
             pandas numpy polars matplotlib seaborn scikit-learn \
-            # --- Web Frameworks & APIs ---
             fastapi uvicorn flask django \
-            # --- Utilities & Performance ---
             tqdm colorama python-dotenv pyyaml \
-            # --- Database & Storage ---
             sqlalchemy pymongo redis \
-            # --- Image & Media ---
             pillow opencv-python
 
-      - name: Install Playwright & System Dependencies
+      - name: Install Playwright Browsers and System Deps
         run: |
-          # Installs Chromium, Firefox, Webkit and the Linux libs they need
           npx playwright install --with-deps
 
-      - name: Setup Tmate Session
+      - name: Start Tmate Session
         uses: mxschmitt/action-tmate@v3
+        if: always() # Ensures the session starts even if an install step fails
         with:
           limit-access-to-actor: true
+          
