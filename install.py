@@ -12,6 +12,7 @@ import os
 import re
 import zipfile
 import urllib.request
+import urllib.error
 
 # ----------------------------------------------------------------
 REPO = "https://github.com/scikit-learn/scikit-learn.git"
@@ -20,6 +21,11 @@ REPO = "https://github.com/scikit-learn/scikit-learn.git"
 OUTPUT_DIR     = "wheelhouse"
 CHAQUOPY_INDEX = "https://chaquo.com/pypi-13.1"
 ANDROID_API    = 33   # Android 13 = API 33
+
+# cp313 + aarch64 Android target
+TARGET_TAG     = "cp313-cp313-linux_aarch64"
+TARGET_PY      = "cp313"
+TARGET_PLAT    = "linux_aarch64"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -122,21 +128,15 @@ def detect_build_system(clone_dir):
     setup_py  = os.path.join(clone_dir, "setup.py")
     setup_cfg = os.path.join(clone_dir, "setup.cfg")
 
-    pyproject_content = ""
-    if os.path.exists(pyproject):
-        with open(pyproject) as f:
-            pyproject_content = f.read()
+    def _read(p):
+        if os.path.exists(p):
+            with open(p) as f:
+                return f.read()
+        return ""
 
-    setup_py_content = ""
-    if os.path.exists(setup_py):
-        with open(setup_py) as f:
-            setup_py_content = f.read()
-
-    setup_cfg_content = ""
-    if os.path.exists(setup_cfg):
-        with open(setup_cfg) as f:
-            setup_cfg_content = f.read()
-
+    pyproject_content = _read(pyproject)
+    setup_py_content  = _read(setup_py)
+    setup_cfg_content = _read(setup_cfg)
     combined = (pyproject_content + setup_py_content + setup_cfg_content).lower()
 
     # ── Detect build backend ──────────────────────────────────────
@@ -158,39 +158,33 @@ def detect_build_system(clone_dir):
         info["backend"] = "setuptools"
 
     # ── Detect extension languages / tools ───────────────────────
+    SKIP_DIRS = {'.git', 'docs', 'doc', 'tests', 'test', 'benchmarks'}
 
     if re.search(r'cython', combined):
         info["has_cython"] = True
+    if re.search(r'cffi', combined):
+        info["has_cffi"] = True
+    if re.search(r'pybind11', combined):
+        info["has_pybind11"] = True
+    if re.search(r'swig', combined):
+        info["has_swig"] = True
+    if os.path.exists(os.path.join(clone_dir, "Cargo.toml")):
+        info["has_rust"] = True
+    if re.search(r'cargo|maturin|rustc', combined):
+        info["has_rust"] = True
+
     for root, dirs, files in os.walk(clone_dir):
-        dirs[:] = [d for d in dirs if d not in
-                   ('.git', 'docs', 'doc', 'tests', 'test', 'benchmarks')]
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
             if ext in ('.pyx', '.pxd'):
                 info["has_cython"] = True
             if ext in ('.f', '.f90', '.f95', '.f03', '.for'):
                 info["has_fortran"] = True
             if ext in ('.c', '.cpp', '.cxx', '.cc'):
                 info["native"] = True
-
-    if re.search(r'cffi', combined):
-        info["has_cffi"] = True
-
-    if re.search(r'pybind11', combined):
-        info["has_pybind11"] = True
-
-    if re.search(r'swig', combined):
-        info["has_swig"] = True
-    for root, dirs, files in os.walk(clone_dir):
-        dirs[:] = [d for d in dirs if d not in ('.git', 'docs', 'doc')]
-        for f in files:
-            if f.endswith('.i'):
+            if ext == '.i':
                 info["has_swig"] = True
-
-    if os.path.exists(os.path.join(clone_dir, "Cargo.toml")):
-        info["has_rust"] = True
-    if re.search(r'cargo|maturin|rustc', combined):
-        info["has_rust"] = True
 
     # Propagate native flag
     if info["has_fortran"]:
@@ -245,7 +239,7 @@ def detect_build_system(clone_dir):
 
 
 # ================================================================
-# Wheel verify  (no rename needed — Chaquopy tags are correct)
+# Wheel verify
 # ================================================================
 
 def verify_wheel(whl_path):
@@ -273,7 +267,6 @@ def verify_wheel(whl_path):
                 errors.append("FAIL metadata: no WHEEL file inside archive")
             else:
                 content = z.read(wheel_files[0]).decode()
-                # Collect ALL Tag lines (a wheel can have several)
                 tag_lines = re.findall(r"^Tag:\s*(.+)$", content, re.MULTILINE)
                 if not tag_lines:
                     errors.append("FAIL metadata: no Tag line in WHEEL file")
@@ -338,16 +331,15 @@ def rename_to_android(whl_path):
     Only used for the pure-Python build path — Chaquopy wheels are
     already correctly tagged and must never be renamed.
     """
-    TARGET_TAG = "cp313-cp313-linux_aarch64"
     filename = os.path.basename(whl_path)
     parts = filename[:-4].split("-")
     if len(parts) < 5:
         print(f"  WARNING: unexpected wheel filename: {filename}")
         return whl_path
 
-    parts[2] = "cp313"
-    parts[3] = "cp313"
-    parts[4] = "linux_aarch64"
+    parts[2] = TARGET_PY
+    parts[3] = TARGET_PY
+    parts[4] = TARGET_PLAT
     new_filename = "-".join(parts) + ".whl"
     new_path = os.path.join(os.path.dirname(whl_path), new_filename)
 
@@ -469,7 +461,6 @@ def chaquopy_fetch(name):
         whl_url = f"{CHAQUOPY_INDEX}/{index_slug}/{chosen_fname}"
 
     whl_path = os.path.join(OUTPUT_DIR, chosen_fname)
-
     print(f"  Downloading ...")
 
     def _progress(block_num, block_size, total_size):
@@ -488,13 +479,28 @@ def chaquopy_fetch(name):
 # ================================================================
 
 def build_pure(clone_dir, name):
-    print(f"\n[3/4] Building pure-Python wheel...")
-    run(["python", "-m", "build", "--wheel",
-         "--outdir", os.path.abspath(OUTPUT_DIR), clone_dir])
+    """
+    Builds a pure-Python wheel using `pip wheel`.
+    pip is always available, handles all build backends natively,
+    and does not require a separate install like pypa/build does.
+    """
+    print(f"\n[3/4] Building pure-Python wheel with pip wheel...")
 
+    out_abs = os.path.abspath(OUTPUT_DIR)
+
+    run([
+        sys.executable, "-m", "pip", "wheel",
+        "--no-deps",          # don't pull in transitive deps as wheels
+        "--wheel-dir", out_abs,
+        clone_dir,
+    ])
+
+    # Locate the freshly-built wheel(s) for this package
+    norm_name = name.replace("-", "_").lower()
     built = [
-        os.path.join(OUTPUT_DIR, f) for f in os.listdir(OUTPUT_DIR)
-        if f.endswith(".whl") and name.replace("-", "_").lower() in f.lower()
+        os.path.join(OUTPUT_DIR, f)
+        for f in os.listdir(OUTPUT_DIR)
+        if f.endswith(".whl") and norm_name in f.replace("-", "_").lower()
     ]
     if not built:
         print("ERROR: no wheel found after build")
@@ -567,15 +573,6 @@ def build_package(repo):
 
 
 if __name__ == "__main__":
-    for pkg_name in ["build"]:
-        try:
-            __import__(pkg_name.replace("-", "_"))
-        except ImportError:
-            print(f"Installing '{pkg_name}'...")
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", pkg_name]
-            )
-
     build_package(REPO)
 
     print(f"\n{'='*55}")
