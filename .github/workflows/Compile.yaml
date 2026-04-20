@@ -17,40 +17,21 @@ jobs:
       - name: Install build deps
         run: |
           python -m pip install --upgrade pip
-          pip install build setuptools wheel
+          pip install build setuptools wheel patchelf
 
       - name: Clone datasets repo
-        run: |
-          git clone https://github.com/huggingface/datasets.git
-          cd datasets
+        run: git clone https://github.com/huggingface/datasets.git
 
       - name: Remove heavy deps (pyarrow etc)
         run: |
-          cd datasets
-          sed -i '/pyarrow/d' setup.py || true
-          sed -i '/pyarrow/d' pyproject.toml || true
+          sed -i '/pyarrow/d' datasets/setup.py || true
+          sed -i '/pyarrow/d' datasets/pyproject.toml || true
 
-      - name: Build wheel
+      - name: Set up Android NDK toolchain
         run: |
-          cd datasets
-          python -m build
-
-      - name: Rename for Termux (cp313 aarch64)
-        run: |
-          mkdir fixed
-          cp datasets/dist/*.whl fixed/
-
-          cd fixed
-          for f in *.whl; do
-            new=$(echo "$f" | sed 's/py3-none-any/cp313-cp313-linux_aarch64/')
-            mv "$f" "$new"
-          done
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: datasets-wheel
-          path: fixed/*.whl          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          API_LEVEL=33
+          NDK=$ANDROID_NDK_HOME
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
 
           echo "CC=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
           echo "CXX=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
@@ -60,55 +41,43 @@ jobs:
 
       - name: Build wheel
         run: |
-          python setup.py bdist_wheel
+          cd datasets
+          python -m build
 
       - name: Unpack wheel
         run: |
           mkdir unpacked
-          for whl in dist/*.whl; do
+          for whl in datasets/dist/*.whl; do
             unzip -q "$whl" -d unpacked
           done
 
       - name: Bundle dependencies
         run: |
           mkdir -p unpacked/lib
-
           find unpacked -name "*.so" | while read so; do
             echo "Processing $so"
-
-            # list dependencies
             ldd "$so" || true
-
-            # copy dependencies if found in system
             ldd "$so" | awk '{print $3}' | while read dep; do
               if [ -f "$dep" ]; then
                 cp -n "$dep" unpacked/lib/ || true
               fi
             done
-
-            # fix RPATH to local folder
             patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib' "$so"
           done
 
-      - name: Strip binaries (smaller size)
-        run: |
-          find unpacked -name "*.so" -exec strip --strip-unneeded {} \; || true
+      - name: Strip binaries
+        run: find unpacked -name "*.so" -exec strip --strip-unneeded {} \; || true
 
-      - name: Repack wheel
+      - name: Repack and rename wheel
         run: |
           mkdir fixed
           cd unpacked
           zip -r ../fixed/package.whl .
           cd ..
-
-      - name: Fix wheel name (cp313 + aarch64)
-        run: |
-          for f in fixed/*.whl; do
-            mv "$f" "fixed/yourpkg-0.1-cp313-cp313-linux_aarch64.whl"
-          done
+          mv fixed/package.whl fixed/datasets-cp313-cp313-linux_aarch64.whl
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-final-wheel
+          name: datasets-wheel
           path: fixed/*.whl
