@@ -1,6 +1,8 @@
 # ============================================================
 # install.py
 # Just set ONE repo. Everything else is automatic.
+# Fetches genuine Android arm64 wheels from Chaquopy for
+# native packages; builds pure-Python wheels locally.
 # ============================================================
 
 import subprocess
@@ -9,16 +11,24 @@ import shutil
 import os
 import re
 import zipfile
+import urllib.request
+import json
 
 # ----------------------------------------------------------------
 REPO = "https://github.com/scikit-learn/scikit-learn.git"
 # ----------------------------------------------------------------
 
-OUTPUT_DIR = "wheelhouse"
-TARGET_TAG = "cp313-cp313-linux_aarch64"
-CIBW_BUILD  = "cp313-android_arm64_v8a"
+OUTPUT_DIR      = "wheelhouse"
+TARGET_TAG      = "cp313-cp313-linux_aarch64"
+CHAQUOPY_INDEX  = "https://chaquo.com/pypi-13.1"
+PYTHON_VERSION  = "313"   # cp313
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+
+# ================================================================
+# Helpers
+# ================================================================
 
 def run(cmd, cwd=None, env=None):
     print(f"  $ {' '.join(str(c) for c in cmd)}")
@@ -29,9 +39,9 @@ def run(cmd, cwd=None, env=None):
         sys.exit(result.returncode)
 
 
-# ----------------------------------------------------------------
-# Package name
-# ----------------------------------------------------------------
+# ================================================================
+# Package name detection
+# ================================================================
 
 def get_package_name(clone_dir):
     for path in ["pyproject.toml", "setup.cfg", "setup.py"]:
@@ -46,9 +56,9 @@ def get_package_name(clone_dir):
     return os.path.basename(clone_dir).lstrip("_src_")
 
 
-# ----------------------------------------------------------------
+# ================================================================
 # Dependency reader
-# ----------------------------------------------------------------
+# ================================================================
 
 def read_deps(clone_dir):
     deps = []
@@ -92,26 +102,14 @@ def read_deps(clone_dir):
     return deps
 
 
-# ----------------------------------------------------------------
+# ================================================================
 # Build system detection
-# ----------------------------------------------------------------
+# ================================================================
 
 def detect_build_system(clone_dir):
     """
-    Returns a dict:
-    {
-        "backend":      "meson" | "cmake" | "setuptools" | "flit" |
-                        "hatchling" | "pdm" | "poetry" | "rust" | "unknown",
-        "has_cython":   bool,
-        "has_cffi":     bool,
-        "has_pybind11": bool,
-        "has_swig":     bool,
-        "has_fortran":  bool,
-        "has_rust":     bool,
-        "xbuild_tools": [list of tools needed],
-        "before_build": "pip install ..." string or "",
-        "native":       bool  (True if C/Fortran/Rust extensions detected)
-    }
+    Returns a dict describing the build backend, extension languages,
+    and what tools/packages are needed to build.
     """
     info = {
         "backend":      "unknown",
@@ -166,12 +164,13 @@ def detect_build_system(clone_dir):
         info["backend"] = "setuptools"
 
     # ── Detect extension languages / tools ───────────────────────
-    # Cython
+
+    # Cython (check text and file extensions)
     if re.search(r'cython', combined):
         info["has_cython"] = True
     for root, dirs, files in os.walk(clone_dir):
-        dirs[:] = [d for d in dirs if d not in ('.git', 'docs', 'doc',
-                                                  'tests', 'test', 'benchmarks')]
+        dirs[:] = [d for d in dirs if d not in
+                   ('.git', 'docs', 'doc', 'tests', 'test', 'benchmarks')]
         for f in files:
             ext = os.path.splitext(f)[1].lower()
             if ext in ('.pyx', '.pxd'):
@@ -195,7 +194,7 @@ def detect_build_system(clone_dir):
     for root, dirs, files in os.walk(clone_dir):
         dirs[:] = [d for d in dirs if d not in ('.git', 'docs', 'doc')]
         for f in files:
-            if f.endswith('.i'):  # SWIG interface files
+            if f.endswith('.i'):
                 info["has_swig"] = True
 
     # Rust / Cargo
@@ -204,20 +203,16 @@ def detect_build_system(clone_dir):
     if re.search(r'cargo|maturin|rustc', combined):
         info["has_rust"] = True
 
-    # Fortran sets native too
+    # Propagate native flag
     if info["has_fortran"]:
         info["native"] = True
-
-    # Any of these sets native
     if any([info["has_cython"], info["has_cffi"],
             info["has_pybind11"], info["has_swig"], info["has_rust"]]):
         info["native"] = True
-
-    # Meson/cmake always native
     if info["backend"] in ("meson", "cmake", "rust"):
         info["native"] = True
 
-    # ── Build xbuild_tools + before_build ────────────────────────
+    # ── Build xbuild_tools + before_build string ─────────────────
     xtools = []
     pkgs   = []
 
@@ -245,8 +240,7 @@ def detect_build_system(clone_dir):
         # setuptools / flit / hatch / pdm / poetry / unknown
         pkgs += ["setuptools", "wheel"]
         if info["has_cython"]:
-            pkgs   += ["cython"]
-            xtools += []          # cython is a python pkg, no xbuild needed
+            pkgs += ["cython"]
         if info["has_cffi"]:
             pkgs += ["cffi"]
         if info["has_pybind11"]:
@@ -262,11 +256,16 @@ def detect_build_system(clone_dir):
     return info
 
 
-# ----------------------------------------------------------------
-# Wheel rename + verify
-# ----------------------------------------------------------------
+# ================================================================
+# Wheel rename + verify  (pure-Python path only)
+# ================================================================
 
 def rename_to_android(whl_path):
+    """
+    Rewrites the wheel filename and internal WHEEL metadata tag
+    from whatever was built to cp313-cp313-linux_aarch64.
+    Only used for pure-Python wheels.
+    """
     filename = os.path.basename(whl_path)
     parts = filename[:-4].split("-")
     if len(parts) < 5:
@@ -297,11 +296,17 @@ def rename_to_android(whl_path):
 
 
 def verify_wheel(whl_path):
+    """
+    Checks filename tag, internal WHEEL metadata tag, and ELF
+    architecture of any .so files. Accepts both linux_aarch64
+    and android_arm64 / arm64_v8a tags (Chaquopy uses the latter).
+    """
     print(f"\n  Verifying: {os.path.basename(whl_path)}")
     errors = []
 
-    if "linux_aarch64" not in whl_path:
-        errors.append("FAIL filename: 'linux_aarch64' not in filename")
+    valid_arm64_tags = ("linux_aarch64", "android_arm64", "arm64_v8a")
+    if not any(t in whl_path for t in valid_arm64_tags):
+        errors.append("FAIL filename: no recognised arm64 tag in filename")
     else:
         print(f"  ✓ Filename tag OK")
 
@@ -316,12 +321,14 @@ def verify_wheel(whl_path):
                 tag_match = re.search(r"^Tag:\s*(.+)$", content, re.MULTILINE)
                 if not tag_match:
                     errors.append("FAIL metadata: no Tag line in WHEEL file")
-                elif "linux_aarch64" not in tag_match.group(1):
-                    errors.append(f"FAIL metadata: Tag is '{tag_match.group(1).strip()}'")
                 else:
-                    print(f"  ✓ Metadata tag OK ({tag_match.group(1).strip()})")
+                    tag_val = tag_match.group(1).strip()
+                    if not any(t in tag_val for t in valid_arm64_tags):
+                        errors.append(f"FAIL metadata: Tag is '{tag_val}'")
+                    else:
+                        print(f"  ✓ Metadata tag OK ({tag_val})")
 
-            # Check .so ELF arch
+            # Check .so ELF architecture
             so_files = [n for n in z.namelist() if n.endswith(".so")]
             if so_files:
                 print(f"  Checking {len(so_files)} .so file(s)...")
@@ -340,8 +347,7 @@ def verify_wheel(whl_path):
                                             f"unknown (0x{e_machine:02X}) ✗")
                         if "✗" in desc:
                             errors.append(
-                                f"FAIL binary: {os.path.basename(so)} "
-                                f"is {desc}"
+                                f"FAIL binary: {os.path.basename(so)} is {desc}"
                             )
                         else:
                             print(f"  ✓ {os.path.basename(so)} → {desc}")
@@ -358,15 +364,109 @@ def verify_wheel(whl_path):
         print()
         sys.exit(1)
 
-    print(f"  ✓ Wheel fully verified as android aarch64")
+    print(f"  ✓ Wheel fully verified as Android arm64")
 
 
-# ----------------------------------------------------------------
+# ================================================================
+# Chaquopy fetch  (native packages)
+# ================================================================
+
+def chaquopy_fetch(name):
+    """
+    Downloads the best matching wheel from Chaquopy's PyPI mirror.
+    Preference order: cp313 > cp312 > cp311, always arm64_v8a.
+    Returns the local path of the downloaded wheel.
+    """
+    pkg = name.replace("-", "_").lower()
+    # Chaquopy index uses the original hyphenated name for the URL path
+    pkg_hyphen = name.lower()
+    index_url = f"{CHAQUOPY_INDEX}/{pkg_hyphen}/"
+
+    print(f"  Fetching index: {index_url}")
+    try:
+        req = urllib.request.Request(
+            index_url,
+            headers={"User-Agent": "install.py/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            html = r.read().decode()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            # Try underscore variant
+            index_url = f"{CHAQUOPY_INDEX}/{pkg}/"
+            print(f"  Retrying:       {index_url}")
+            try:
+                req = urllib.request.Request(
+                    index_url,
+                    headers={"User-Agent": "install.py/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    html = r.read().decode()
+            except Exception as e2:
+                print(f"ERROR: Could not fetch Chaquopy index for '{name}': {e2}")
+                sys.exit(1)
+        else:
+            print(f"ERROR: Could not fetch Chaquopy index for '{name}': {e}")
+            sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: Could not fetch Chaquopy index for '{name}': {e}")
+        sys.exit(1)
+
+    # Parse all wheel hrefs
+    wheels = re.findall(r'href="([^"]*\.whl[^"]*)"', html)
+    # Strip query strings / fragments
+    wheels = [w.split("?")[0].split("#")[0] for w in wheels]
+    # Keep only arm64_v8a wheels
+    arm64_wheels = [w for w in wheels if "arm64_v8a" in w]
+
+    if not arm64_wheels:
+        print(f"ERROR: No arm64_v8a wheels found for '{name}' on Chaquopy")
+        print(f"  Available wheels: {wheels[:10]}")
+        sys.exit(1)
+
+    # Pick best Python version match: cp313 > cp312 > cp311 > any
+    chosen = None
+    for pyver in [f"cp{PYTHON_VERSION}", "cp312", "cp311"]:
+        candidates = [w for w in arm64_wheels if pyver in w]
+        if candidates:
+            chosen = candidates[-1]   # last = highest version
+            if pyver != f"cp{PYTHON_VERSION}":
+                print(f"  WARNING: No cp{PYTHON_VERSION} wheel found, "
+                      f"falling back to {pyver}")
+            break
+
+    if not chosen:
+        chosen = arm64_wheels[-1]
+        print(f"  WARNING: No versioned match found, using: {chosen}")
+
+    # Build the full download URL
+    if chosen.startswith("http"):
+        whl_url = chosen
+    else:
+        whl_url = f"{CHAQUOPY_INDEX}/{pkg_hyphen}/{os.path.basename(chosen)}"
+
+    whl_filename = os.path.basename(chosen)
+    whl_path = os.path.join(OUTPUT_DIR, whl_filename)
+
+    print(f"  Downloading:    {whl_filename}")
+
+    def progress(block_num, block_size, total_size):
+        if total_size > 0:
+            pct = min(block_num * block_size * 100 // total_size, 100)
+            print(f"\r  Progress:       {pct}%", end="", flush=True)
+
+    urllib.request.urlretrieve(whl_url, whl_path, reporthook=progress)
+    print()  # newline after progress
+    print(f"  Saved to:       {whl_path}")
+    return whl_path
+
+
+# ================================================================
 # Build paths
-# ----------------------------------------------------------------
+# ================================================================
 
 def build_pure(clone_dir, name):
-    print(f"\n[3/4] Building pure Python wheel...")
+    print(f"\n[3/4] Building pure-Python wheel...")
     run(["python", "-m", "build", "--wheel",
          "--outdir", os.path.abspath(OUTPUT_DIR), clone_dir])
 
@@ -385,10 +485,13 @@ def build_pure(clone_dir, name):
 
 
 def build_native(clone_dir, name, binfo):
-    print(f"\n[3/4] Cross-compiling native wheel via cibuildwheel...")
-    print(f"  backend:      {binfo['backend']}")
-    print(f"  xbuild_tools: {binfo['xbuild_tools'] or '(none)'}")
-    print(f"  before_build: {binfo['before_build'] or '(none)'}")
+    """
+    Fetches a genuine Android arm64 wheel from Chaquopy.
+    No cross-compiler or NDK required.
+    """
+    print(f"\n[3/4] Fetching pre-built Android wheel from Chaquopy...")
+    print(f"  Package:      {name}")
+    print(f"  Backend:      {binfo['backend']}")
     print(f"  cython:       {binfo['has_cython']}")
     print(f"  cffi:         {binfo['has_cffi']}")
     print(f"  pybind11:     {binfo['has_pybind11']}")
@@ -396,48 +499,15 @@ def build_native(clone_dir, name, binfo):
     print(f"  fortran:      {binfo['has_fortran']}")
     print(f"  rust:         {binfo['has_rust']}")
 
-    env = {
-        "CIBW_BUILD":           CIBW_BUILD,
-        "CIBW_ARCHS_ANDROID":   "arm64_v8a",
-        "CIBW_BUILD_FRONTEND":  "build",
-        "CIBW_OUTPUT_DIR":      os.path.abspath(OUTPUT_DIR),
-        "CIBW_BUILD_VERBOSITY": "1",
-    }
-
-    if binfo["xbuild_tools"]:
-        env["CIBW_XBUILD_TOOLS"] = " ".join(binfo["xbuild_tools"])
-
-    if binfo["before_build"]:
-        env["CIBW_BEFORE_BUILD"] = binfo["before_build"]
-
-    # Rust needs the target added
-    if binfo["has_rust"]:
-        env["CIBW_BEFORE_ALL"] = (
-            "rustup target add aarch64-linux-android"
-        )
-
-    run(
-        ["cibuildwheel", "--platform", "android", "--archs", "arm64_v8a",
-         clone_dir],
-        env=env,
-    )
-
-    built = [
-        os.path.join(OUTPUT_DIR, f) for f in os.listdir(OUTPUT_DIR)
-        if f.endswith(".whl") and name.replace("-", "_").lower() in f.lower()
-    ]
-    if not built:
-        print("ERROR: no wheel found after cibuildwheel build")
-        sys.exit(1)
+    whl_path = chaquopy_fetch(name)
 
     print(f"\n[4/4] Verifying...")
-    for whl in built:
-        verify_wheel(whl)
+    verify_wheel(whl_path)
 
 
-# ----------------------------------------------------------------
+# ================================================================
 # Main
-# ----------------------------------------------------------------
+# ================================================================
 
 def build_package(repo):
     clone_dir = "_src_" + repo.rstrip("/").split("/")[-1].replace(".git", "")
@@ -475,12 +545,15 @@ def build_package(repo):
 
 
 if __name__ == "__main__":
-    for pkg_name in ["build", "cibuildwheel"]:
+    # Ensure build is available (cibuildwheel no longer needed)
+    for pkg_name in ["build"]:
         try:
             __import__(pkg_name.replace("-", "_"))
         except ImportError:
             print(f"Installing '{pkg_name}'...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg_name])
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", pkg_name]
+            )
 
     build_package(REPO)
 
