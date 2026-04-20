@@ -1,32 +1,36 @@
-name: Python Automation Debug
+name: Debug Session
 
-on: 
+on:
   workflow_dispatch:
 
 jobs:
-  tmate-session:
+  debug:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
-      - name: Install Core Packages
+      - name: Install Python packages
+        run: pip install lxml playwright selenium
+
+      - name: Install Playwright browsers
+        run: playwright install --with-deps
+
+      - name: Install tmate
         run: |
-          python -m pip install --upgrade pip
-          pip install selenium playwright lxml
+          sudo apt-get update -y
+          sudo apt-get install -y tmate
 
-      - name: Install Playwright Browsers
+      - name: Start tmate session
         run: |
-          npx playwright install --with-deps
-
-      - name: Start Tmate Session
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: true
-          limit-access-to-actor: true
-          
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
+          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
+          sleep infinity
