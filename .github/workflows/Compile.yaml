@@ -1,0 +1,98 @@
+name: Build Android Wheel (cp313 aarch64 FULL)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      API_LEVEL: "21"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install setuptools wheel build
+          sudo apt update
+          sudo apt install -y patchelf zip unzip
+
+      - name: Download Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          echo "NDK=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+
+      - name: Setup toolchain
+        run: |
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+
+          echo "CC=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
+
+      - name: Build wheel
+        run: |
+          python setup.py bdist_wheel
+
+      - name: Unpack wheel
+        run: |
+          mkdir unpacked
+          for whl in dist/*.whl; do
+            unzip -q "$whl" -d unpacked
+          done
+
+      - name: Bundle dependencies
+        run: |
+          mkdir -p unpacked/lib
+
+          find unpacked -name "*.so" | while read so; do
+            echo "Processing $so"
+
+            # list dependencies
+            ldd "$so" || true
+
+            # copy dependencies if found in system
+            ldd "$so" | awk '{print $3}' | while read dep; do
+              if [ -f "$dep" ]; then
+                cp -n "$dep" unpacked/lib/ || true
+              fi
+            done
+
+            # fix RPATH to local folder
+            patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib' "$so"
+          done
+
+      - name: Strip binaries (smaller size)
+        run: |
+          find unpacked -name "*.so" -exec strip --strip-unneeded {} \; || true
+
+      - name: Repack wheel
+        run: |
+          mkdir fixed
+          cd unpacked
+          zip -r ../fixed/package.whl .
+          cd ..
+
+      - name: Fix wheel name (cp313 + aarch64)
+        run: |
+          for f in fixed/*.whl; do
+            mv "$f" "fixed/yourpkg-0.1-cp313-cp313-linux_aarch64.whl"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-final-wheel
+          path: fixed/*.whl
