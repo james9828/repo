@@ -1,27 +1,66 @@
-name: Tmate Shell
+name: Build dlib Android Wheel
 
 on:
   workflow_dispatch:
 
 jobs:
-  debug:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+
+    env:
+      API_LEVEL: 24
+      TARGET: aarch64-linux-android
 
     steps:
-      - name: Install tmate
-        run: sudo apt-get update && sudo apt-get install -y tmate
+      - uses: actions/checkout@v4
 
-      - name: Start tmate session
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
         run: |
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
+          pip install --upgrade pip
+          pip install wheel setuptools cmake
 
-          echo "SSH SESSION:"
-          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
+      - name: Download NDK
+        run: |
+          wget https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          mv android-ndk-r26d $HOME/ndk
 
-          echo "WEB SESSION:"
-          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
+      - name: Setup toolchain
+        run: |
+          TOOLCHAIN=$HOME/ndk/toolchains/llvm/prebuilt/linux-x86_64
+          echo "CC=$TOOLCHAIN/bin/${TARGET}${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/bin/${TARGET}${API_LEVEL}-clang++" >> $GITHUB_ENV
 
-          # keep session alive
-          sleep 21600
+      - name: Clone dlib
+        run: |
+          git clone https://github.com/davisking/dlib.git
+
+      - name: Build dlib Python wheel
+        run: |
+          cd dlib
+
+          python setup.py build_ext \
+            --yes USE_AVX_INSTRUCTIONS=0 \
+            --yes DLIB_USE_CUDA=0 \
+            --yes DLIB_NO_GUI_SUPPORT=1
+
+          python setup.py bdist_wheel
+
+      - name: Fix wheel tag
+        run: |
+          mkdir out
+          for f in dlib/dist/*.whl; do
+            base=$(basename "$f")
+            new=$(echo "$base" | sed 's/linux/android_aarch64/')
+            cp "$f" out/$new
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dlib-android-wheel
+          path: out/*.whl
