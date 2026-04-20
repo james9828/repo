@@ -17,6 +17,9 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install dependencies
+        run: pip install build
+
       - name: Run install.py
         run: python install.py
 
@@ -25,3 +28,4 @@ jobs:
         with:
           name: wheels
           path: wheelhouse/*.whl
+          if-no-files-found: error
