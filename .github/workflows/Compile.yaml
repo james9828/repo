@@ -27,9 +27,10 @@ jobs:
           sed -i '/pyarrow/d' datasets/pyproject.toml || true
 
       - name: Build Android aarch64 wheel
-        run: cibuildwheel --platform android datasets
+        run: cibuildwheel --platform android --archs arm64_v8a datasets
         env:
           CIBW_BUILD: "cp313-android_arm64_v8a"
+          CIBW_ARCHS_ANDROID: "arm64_v8a"
           CIBW_BUILD_FRONTEND: "build"
 
       - name: Upload artifact
