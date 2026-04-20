@@ -329,83 +329,6 @@ def verify_wheel(whl_path):
 
 
 # ================================================================
-# Retag Chaquopy wheel to cp313 so pip accepts it
-# ================================================================
-
-def retag_for_cp313(whl_path):
-    """
-    Chaquopy wheels are built with an older CPython (e.g. cp38) but the
-    .so binaries are ABI-compatible with cp313 on Android.  pip refuses
-    to install them because the filename/metadata tags don't match the
-    running interpreter.
-
-    This function rewrites:
-      • The wheel filename  (cpXX-cpXX  →  cp313-cp313)
-      • Every Tag: line inside the WHEEL metadata file
-
-    The platform tag (android_21_arm64_v8a, etc.) and all other metadata
-    are left untouched.
-    """
-    filename  = os.path.basename(whl_path)
-    parts     = filename[:-4].split("-")   # strip .whl, split on -
-
-    # Standard wheel name: {dist}-{ver}-{pyver}-{abi}-{platform}.whl
-    # Chaquopy adds a build tag:  {dist}-{ver}-{build}-{pyver}-{abi}-{plat}.whl
-    # Detect which layout we have and find the pyver/abi indices.
-    if len(parts) == 5:
-        pyver_idx, abi_idx = 2, 3
-    elif len(parts) == 6:
-        pyver_idx, abi_idx = 3, 4
-    else:
-        print(f"  WARNING: unexpected wheel name format, skipping retag: {filename}")
-        return whl_path
-
-    old_pyver = parts[pyver_idx]
-    old_abi   = parts[abi_idx]
-
-    if old_pyver == "cp313" and old_abi == "cp313":
-        print(f"  Tags already cp313, no retag needed.")
-        return whl_path
-
-    parts[pyver_idx] = "cp313"
-    parts[abi_idx]   = "cp313"
-    new_filename = "-".join(parts) + ".whl"
-    new_path     = os.path.join(os.path.dirname(whl_path), new_filename)
-
-    print(f"  Retagging:  {filename}")
-    print(f"         -->  {new_filename}")
-
-    tmp_path = whl_path + ".tmp"
-    with zipfile.ZipFile(whl_path, "r") as zin, \
-         zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-
-            # Rewrite the WHEEL metadata file
-            if item.filename.endswith("/WHEEL"):
-                text = data.decode()
-                # Replace every Tag: cpXX-cpXX-<plat> with cp313-cp313-<plat>
-                text = re.sub(
-                    r"(Tag:\s*)cp\d+-(cp\d+|abi3|none)-",
-                    r"\g<1>cp313-cp313-",
-                    text
-                )
-                data = text.encode()
-
-            # Rename the .dist-info directory if it contains the old pyver
-            new_name = item.filename
-            if old_pyver in item.filename:
-                new_name = item.filename.replace(old_pyver, "cp313", 1)
-            item.filename = new_name
-
-            zout.writestr(item, data)
-
-    os.remove(whl_path)
-    os.rename(tmp_path, new_path)
-    return new_path
-
-
-# ================================================================
 # Pure-Python wheel rename + verify
 # ================================================================
 
@@ -599,9 +522,6 @@ def build_native(clone_dir, name, binfo):
     print(f"  rust:         {binfo['has_rust']}")
 
     whl_path = chaquopy_fetch(name)
-
-    print(f"\n  Retagging wheel to cp313 so pip accepts it...")
-    whl_path = retag_for_cp313(whl_path)
 
     print(f"\n[4/4] Verifying...")
     verify_wheel(whl_path)
