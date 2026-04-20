@@ -1,4 +1,4 @@
-name: Build datasets wheel (cp313 aarch64 android)
+name: Build datasets wheel (android)
 
 on:
   push:
@@ -9,32 +9,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Install cibuildwheel
-        run: pip install cibuildwheel
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
 
       - name: Clone datasets and strip heavy deps
         run: |
           git clone https://github.com/huggingface/datasets.git
-          sed -i '/pyarrow/d' datasets/setup.py || true
           sed -i '/pyarrow/d' datasets/pyproject.toml || true
+          sed -i '/pyarrow/d' datasets/setup.py || true
 
-      - name: Build Android aarch64 wheel
-        run: cibuildwheel --platform android --archs arm64_v8a datasets
-        env:
-          CIBW_BUILD: "cp313-android_arm64_v8a"
-          CIBW_ARCHS_ANDROID: "arm64_v8a"
-          CIBW_BUILD_FRONTEND: "build"
+      - name: Build wheel
+        run: |
+          cd datasets
+          python -m build --wheel
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: datasets-android-wheel
-          path: wheelhouse/*.whl
+          name: datasets-wheel
+          path: datasets/dist/*.whl
