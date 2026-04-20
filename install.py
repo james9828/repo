@@ -13,7 +13,7 @@ import re
 # CONFIGURE YOUR PACKAGES HERE
 # ----------------------------------------------------------------
 PACKAGES = [
-    {"repo": "https://github.com/huggingface/datasets.git"},
+    {"repo": "https://github.com/scikit-learn/scikit-learn.git"},
     # {"repo": "https://github.com/huggingface/tokenizers.git"},
 ]
 # ----------------------------------------------------------------
