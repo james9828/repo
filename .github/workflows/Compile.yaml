@@ -9,85 +9,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y patchelf zip unzip
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Install build deps
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+
+      - name: Clone datasets and strip heavy deps
         run: |
-          python -m pip install --upgrade pip
-          pip install build setuptools wheel crossenv
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r26d
-          add-to-path: true
-
-      - name: Download CPython 3.13 for aarch64 Android
-        run: |
-          # Download pre-built CPython for Android aarch64 from python-build-standalone
-          wget -q https://github.com/indygreg/python-build-standalone/releases/download/20241002/cpython-3.13.0-aarch64-unknown-linux-android-install_only.tar.gz
-          tar -xzf cpython-3.13.0-aarch64-unknown-linux-android-install_only.tar.gz
-          mv python android-python
-
-      - name: Clone datasets repo
-        run: git clone https://github.com/huggingface/datasets.git
-
-      - name: Remove incompatible deps
-        run: |
+          git clone https://github.com/huggingface/datasets.git
           sed -i '/pyarrow/d' datasets/setup.py || true
           sed -i '/pyarrow/d' datasets/pyproject.toml || true
-          sed -i '/pyarrow/d' datasets/requirements.txt || true
 
-      - name: Set NDK toolchain env
-        run: |
-          API_LEVEL=33
-          TOOLCHAIN=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64
-
-          echo "CC=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
-          echo "CXX=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
-          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
-          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
-          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
-          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
-
-      - name: Build wheel with crossenv
-        run: |
-          # Create a cross-compilation environment targeting Android aarch64
-          python -m crossenv ./android-python/bin/python3.13 crossenv
-          source crossenv/bin/activate
-
-          pip install build setuptools wheel
-          cd datasets
-          python -m build --wheel
-
-      - name: Fix wheel tag
-        run: |
-          mkdir fixed
-          for whl in datasets/dist/*.whl; do
-            base=$(basename "$whl")
-            # Replace any python/abi/platform tag with cp313 android tag
-            new=$(echo "$base" | sed 's/-[^-]*-[^-]*-[^-]*\.whl/-cp313-cp313-linux_aarch64.whl/')
-            cp "$whl" "fixed/$new"
-          done
-
-      - name: Strip and patch binaries
-        run: |
-          find fixed -name "*.so" | while read so; do
-            $STRIP --strip-unneeded "$so" || true
-            patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib' "$so" || true
-          done
+      - name: Build Android aarch64 wheel
+        run: cibuildwheel --platform android datasets
+        env:
+          CIBW_BUILD: "cp313-android_aarch64"
+          CIBW_ARCHS_ANDROID: "aarch64"
+          CIBW_BUILD_FRONTEND: "build"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: datasets-android-wheel
-          path: fixed/*.whl
+          path: wheelhouse/*.whl
