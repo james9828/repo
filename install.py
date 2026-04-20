@@ -16,18 +16,22 @@ REPO = "https://github.com/scikit-learn/scikit-learn.git"
 
 OUTPUT_DIR = "wheelhouse"
 TARGET_TAG = "cp313-cp313-linux_aarch64"
-CIBW_BUILD = "cp313-android_arm64_v8a"
+CIBW_BUILD  = "cp313-android_arm64_v8a"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def run(cmd, cwd=None, env=None):
-    print(f"  $ {' '.join(cmd)}")
+    print(f"  $ {' '.join(str(c) for c in cmd)}")
     e = {**os.environ, **(env or {})}
     result = subprocess.run(cmd, cwd=cwd, env=e)
     if result.returncode != 0:
         print(f"ERROR: command failed with exit code {result.returncode}")
         sys.exit(result.returncode)
 
+
+# ----------------------------------------------------------------
+# Package name
+# ----------------------------------------------------------------
 
 def get_package_name(clone_dir):
     for path in ["pyproject.toml", "setup.cfg", "setup.py"]:
@@ -42,20 +46,23 @@ def get_package_name(clone_dir):
     return os.path.basename(clone_dir).lstrip("_src_")
 
 
+# ----------------------------------------------------------------
+# Dependency reader
+# ----------------------------------------------------------------
+
 def read_deps(clone_dir):
     deps = []
-    for path, pattern in [
-        ("pyproject.toml", r'dependencies\s*=\s*\[(.*?)\]'),
-        ("setup.py",       r'install_requires\s*=\s*\[(.*?)\]'),
-    ]:
-        full = os.path.join(clone_dir, path)
-        if os.path.exists(full):
-            with open(full) as f:
-                content = f.read()
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                deps += re.findall(r'["\']([^"\']+)["\']', match.group(1))
 
+    # pyproject.toml [project] dependencies
+    pyproject = os.path.join(clone_dir, "pyproject.toml")
+    if os.path.exists(pyproject):
+        with open(pyproject) as f:
+            content = f.read()
+        match = re.search(r'dependencies\s*=\s*\[(.*?)\]', content, re.DOTALL)
+        if match:
+            deps += re.findall(r'["\']([^"\']+)["\']', match.group(1))
+
+    # setup.cfg install_requires
     setup_cfg = os.path.join(clone_dir, "setup.cfg")
     if os.path.exists(setup_cfg):
         with open(setup_cfg) as f:
@@ -64,6 +71,16 @@ def read_deps(clone_dir):
         if match:
             deps += [l.strip() for l in match.group(1).splitlines() if l.strip()]
 
+    # setup.py install_requires
+    setup_py = os.path.join(clone_dir, "setup.py")
+    if os.path.exists(setup_py):
+        with open(setup_py) as f:
+            content = f.read()
+        match = re.search(r'install_requires\s*=\s*\[(.*?)\]', content, re.DOTALL)
+        if match:
+            deps += re.findall(r'["\']([^"\']+)["\']', match.group(1))
+
+    # requirements.txt
     requirements = os.path.join(clone_dir, "requirements.txt")
     if os.path.exists(requirements):
         with open(requirements) as f:
@@ -71,40 +88,189 @@ def read_deps(clone_dir):
                 line = line.strip()
                 if line and not line.startswith("#"):
                     deps.append(line)
+
     return deps
 
 
-def has_c_extensions(clone_dir):
-    for root, dirs, files in os.walk(clone_dir):
-        dirs[:] = [d for d in dirs if not d.startswith('.')
-                   and d not in ('docs', 'doc', 'tests', 'test')]
-        for f in files:
-            if f.endswith(('.c', '.cpp', '.cxx', '.pyx', '.pxd')):
-                rel = os.path.relpath(os.path.join(root, f), clone_dir)
-                return True, f"found source file: {rel}"
+# ----------------------------------------------------------------
+# Build system detection
+# ----------------------------------------------------------------
 
-    setup_py = os.path.join(clone_dir, "setup.py")
-    if os.path.exists(setup_py):
-        with open(setup_py) as f:
-            content = f.read()
-        if re.search(r'Extension\s*\(|Cython|cffi|ctypes', content):
-            return True, "setup.py references Extension/Cython/cffi"
+def detect_build_system(clone_dir):
+    """
+    Returns a dict:
+    {
+        "backend":      "meson" | "cmake" | "setuptools" | "flit" |
+                        "hatchling" | "pdm" | "poetry" | "rust" | "unknown",
+        "has_cython":   bool,
+        "has_cffi":     bool,
+        "has_pybind11": bool,
+        "has_swig":     bool,
+        "has_fortran":  bool,
+        "has_rust":     bool,
+        "xbuild_tools": [list of tools needed],
+        "before_build": "pip install ..." string or "",
+        "native":       bool  (True if C/Fortran/Rust extensions detected)
+    }
+    """
+    info = {
+        "backend":      "unknown",
+        "has_cython":   False,
+        "has_cffi":     False,
+        "has_pybind11": False,
+        "has_swig":     False,
+        "has_fortran":  False,
+        "has_rust":     False,
+        "xbuild_tools": [],
+        "before_build": "",
+        "native":       False,
+    }
 
     pyproject = os.path.join(clone_dir, "pyproject.toml")
+    setup_py  = os.path.join(clone_dir, "setup.py")
+    setup_cfg = os.path.join(clone_dir, "setup.cfg")
+
+    pyproject_content = ""
     if os.path.exists(pyproject):
         with open(pyproject) as f:
-            content = f.read()
-        if re.search(r'meson|cmake|scikit.build|ninja|cython|cffi|pybind11',
-                     content, re.IGNORECASE):
-            return True, "pyproject.toml references native build system"
+            pyproject_content = f.read()
 
-    return False, "no C extensions detected"
+    setup_py_content = ""
+    if os.path.exists(setup_py):
+        with open(setup_py) as f:
+            setup_py_content = f.read()
 
+    setup_cfg_content = ""
+    if os.path.exists(setup_cfg):
+        with open(setup_cfg) as f:
+            setup_cfg_content = f.read()
+
+    combined = (pyproject_content + setup_py_content + setup_cfg_content).lower()
+
+    # ── Detect build backend ──────────────────────────────────────
+    if re.search(r'mesonpy|meson-python|meson\.build', combined):
+        info["backend"] = "meson"
+    elif re.search(r'scikit.build|skbuild|cmake', combined):
+        info["backend"] = "cmake"
+    elif re.search(r'maturin', combined):
+        info["backend"] = "rust"
+    elif re.search(r'flit', combined):
+        info["backend"] = "flit"
+    elif re.search(r'hatchling|hatch', combined):
+        info["backend"] = "hatchling"
+    elif re.search(r'pdm', combined):
+        info["backend"] = "pdm"
+    elif re.search(r'poetry', combined):
+        info["backend"] = "poetry"
+    elif re.search(r'setuptools', combined):
+        info["backend"] = "setuptools"
+
+    # ── Detect extension languages / tools ───────────────────────
+    # Cython
+    if re.search(r'cython', combined):
+        info["has_cython"] = True
+    for root, dirs, files in os.walk(clone_dir):
+        dirs[:] = [d for d in dirs if d not in ('.git', 'docs', 'doc',
+                                                  'tests', 'test', 'benchmarks')]
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in ('.pyx', '.pxd'):
+                info["has_cython"] = True
+            if ext in ('.f', '.f90', '.f95', '.f03', '.for'):
+                info["has_fortran"] = True
+            if ext in ('.c', '.cpp', '.cxx', '.cc'):
+                info["native"] = True
+
+    # CFFI
+    if re.search(r'cffi', combined):
+        info["has_cffi"] = True
+
+    # pybind11
+    if re.search(r'pybind11', combined):
+        info["has_pybind11"] = True
+
+    # SWIG
+    if re.search(r'swig', combined):
+        info["has_swig"] = True
+    for root, dirs, files in os.walk(clone_dir):
+        dirs[:] = [d for d in dirs if d not in ('.git', 'docs', 'doc')]
+        for f in files:
+            if f.endswith('.i'):  # SWIG interface files
+                info["has_swig"] = True
+
+    # Rust / Cargo
+    if os.path.exists(os.path.join(clone_dir, "Cargo.toml")):
+        info["has_rust"] = True
+    if re.search(r'cargo|maturin|rustc', combined):
+        info["has_rust"] = True
+
+    # Fortran sets native too
+    if info["has_fortran"]:
+        info["native"] = True
+
+    # Any of these sets native
+    if any([info["has_cython"], info["has_cffi"],
+            info["has_pybind11"], info["has_swig"], info["has_rust"]]):
+        info["native"] = True
+
+    # Meson/cmake always native
+    if info["backend"] in ("meson", "cmake", "rust"):
+        info["native"] = True
+
+    # ── Build xbuild_tools + before_build ────────────────────────
+    xtools = []
+    pkgs   = []
+
+    if info["backend"] == "meson":
+        xtools += ["meson", "ninja"]
+        pkgs   += ["meson-python", "meson", "ninja"]
+        if info["has_cython"]:
+            pkgs += ["cython"]
+        if info["has_pybind11"]:
+            pkgs += ["pybind11"]
+
+    elif info["backend"] == "cmake":
+        xtools += ["cmake", "ninja"]
+        pkgs   += ["scikit-build-core", "cmake", "ninja"]
+        if info["has_cython"]:
+            pkgs += ["cython"]
+        if info["has_pybind11"]:
+            pkgs += ["pybind11"]
+
+    elif info["backend"] == "rust":
+        xtools += ["rustc", "cargo"]
+        pkgs   += ["maturin"]
+
+    else:
+        # setuptools / flit / hatch / pdm / poetry / unknown
+        pkgs += ["setuptools", "wheel"]
+        if info["has_cython"]:
+            pkgs   += ["cython"]
+            xtools += []          # cython is a python pkg, no xbuild needed
+        if info["has_cffi"]:
+            pkgs += ["cffi"]
+        if info["has_pybind11"]:
+            pkgs += ["pybind11"]
+        if info["has_swig"]:
+            xtools += ["swig"]
+        if info["has_fortran"]:
+            xtools += ["gfortran"]
+
+    info["xbuild_tools"] = list(dict.fromkeys(xtools))
+    info["before_build"] = f"pip install {' '.join(pkgs)}" if pkgs else ""
+
+    return info
+
+
+# ----------------------------------------------------------------
+# Wheel rename + verify
+# ----------------------------------------------------------------
 
 def rename_to_android(whl_path):
     filename = os.path.basename(whl_path)
     parts = filename[:-4].split("-")
     if len(parts) < 5:
+        print(f"  WARNING: unexpected wheel filename: {filename}")
         return whl_path
 
     parts[2] = "cp313"
@@ -141,6 +307,7 @@ def verify_wheel(whl_path):
 
     try:
         with zipfile.ZipFile(whl_path, "r") as z:
+            # Check WHEEL metadata
             wheel_files = [n for n in z.namelist() if n.endswith("/WHEEL")]
             if not wheel_files:
                 errors.append("FAIL metadata: no WHEEL file inside archive")
@@ -154,6 +321,7 @@ def verify_wheel(whl_path):
                 else:
                     print(f"  ✓ Metadata tag OK ({tag_match.group(1).strip()})")
 
+            # Check .so ELF arch
             so_files = [n for n in z.namelist() if n.endswith(".so")]
             if so_files:
                 print(f"  Checking {len(so_files)} .so file(s)...")
@@ -161,19 +329,22 @@ def verify_wheel(whl_path):
                     data = z.read(so)
                     if len(data) >= 20 and data[:4] == b'\x7fELF':
                         e_machine = data[18]
-                        if e_machine == 0xB7:
-                            print(f"  ✓ {os.path.basename(so)} → aarch64")
-                        elif e_machine == 0x3E:
-                            errors.append(
-                                f"FAIL binary: {os.path.basename(so)} is x86_64 — "
-                                f"this will CRASH on Android. "
-                                f"Package needs proper cross-compilation."
-                            )
-                        else:
+                        arch_map = {
+                            0xB7: "aarch64 ✓",
+                            0x3E: "x86_64  ✗ WRONG ARCH — will CRASH on Android",
+                            0x28: "arm32   ✗ WRONG ARCH",
+                            0x08: "mips    ✗ WRONG ARCH",
+                            0x16: "ppc     ✗ WRONG ARCH",
+                        }
+                        desc = arch_map.get(e_machine,
+                                            f"unknown (0x{e_machine:02X}) ✗")
+                        if "✗" in desc:
                             errors.append(
                                 f"FAIL binary: {os.path.basename(so)} "
-                                f"unknown arch (0x{e_machine:02X})"
+                                f"is {desc}"
                             )
+                        else:
+                            print(f"  ✓ {os.path.basename(so)} → {desc}")
             else:
                 print(f"  ✓ No .so files (pure Python)")
 
@@ -189,6 +360,10 @@ def verify_wheel(whl_path):
 
     print(f"  ✓ Wheel fully verified as android aarch64")
 
+
+# ----------------------------------------------------------------
+# Build paths
+# ----------------------------------------------------------------
 
 def build_pure(clone_dir, name):
     print(f"\n[3/4] Building pure Python wheel...")
@@ -209,16 +384,42 @@ def build_pure(clone_dir, name):
         verify_wheel(final)
 
 
-def build_native(clone_dir, name):
+def build_native(clone_dir, name, binfo):
     print(f"\n[3/4] Cross-compiling native wheel via cibuildwheel...")
+    print(f"  backend:      {binfo['backend']}")
+    print(f"  xbuild_tools: {binfo['xbuild_tools'] or '(none)'}")
+    print(f"  before_build: {binfo['before_build'] or '(none)'}")
+    print(f"  cython:       {binfo['has_cython']}")
+    print(f"  cffi:         {binfo['has_cffi']}")
+    print(f"  pybind11:     {binfo['has_pybind11']}")
+    print(f"  swig:         {binfo['has_swig']}")
+    print(f"  fortran:      {binfo['has_fortran']}")
+    print(f"  rust:         {binfo['has_rust']}")
+
+    env = {
+        "CIBW_BUILD":           CIBW_BUILD,
+        "CIBW_ARCHS_ANDROID":   "arm64_v8a",
+        "CIBW_BUILD_FRONTEND":  "build",
+        "CIBW_OUTPUT_DIR":      os.path.abspath(OUTPUT_DIR),
+        "CIBW_BUILD_VERBOSITY": "1",
+    }
+
+    if binfo["xbuild_tools"]:
+        env["CIBW_XBUILD_TOOLS"] = " ".join(binfo["xbuild_tools"])
+
+    if binfo["before_build"]:
+        env["CIBW_BEFORE_BUILD"] = binfo["before_build"]
+
+    # Rust needs the target added
+    if binfo["has_rust"]:
+        env["CIBW_BEFORE_ALL"] = (
+            "rustup target add aarch64-linux-android"
+        )
+
     run(
-        ["cibuildwheel", "--platform", "android", "--archs", "arm64_v8a", clone_dir],
-        env={
-            "CIBW_BUILD":          CIBW_BUILD,
-            "CIBW_ARCHS_ANDROID":  "arm64_v8a",
-            "CIBW_BUILD_FRONTEND": "build",
-            "CIBW_OUTPUT_DIR":     os.path.abspath(OUTPUT_DIR),
-        }
+        ["cibuildwheel", "--platform", "android", "--archs", "arm64_v8a",
+         clone_dir],
+        env=env,
     )
 
     built = [
@@ -234,6 +435,10 @@ def build_native(clone_dir, name):
         verify_wheel(whl)
 
 
+# ----------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------
+
 def build_package(repo):
     clone_dir = "_src_" + repo.rstrip("/").split("/")[-1].replace(".git", "")
 
@@ -248,18 +453,21 @@ def build_package(repo):
     name = get_package_name(clone_dir)
     print(f"      Package name: {name}")
 
-    print(f"\n[2/4] Dependencies:")
+    print(f"\n[2/4] Analysing project...")
+    binfo = detect_build_system(clone_dir)
+
     deps = read_deps(clone_dir)
+    print(f"  Dependencies ({len(deps)}):")
     for d in deps:
         print(f"    {d}")
     if not deps:
         print("    (none found)")
 
-    native, reason = has_c_extensions(clone_dir)
-    print(f"\n      Mode: {'native (cibuildwheel)' if native else 'pure Python'} — {reason}")
+    print(f"\n  Build system: {binfo['backend']}")
+    print(f"  Native:       {binfo['native']}")
 
-    if native:
-        build_native(clone_dir, name)
+    if binfo["native"]:
+        build_native(clone_dir, name, binfo)
     else:
         build_pure(clone_dir, name)
 
