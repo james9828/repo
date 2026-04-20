@@ -1,7 +1,7 @@
-name: Ultimate Tmate Session
+name: Python Automation Debug
 
 on: 
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   tmate-session:
@@ -15,24 +15,18 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Massive Package List
+      - name: Install Core Packages
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install \
-            selenium playwright beautifulsoup4 requests aiohttp scrapy \
-            pandas numpy polars matplotlib seaborn scikit-learn \
-            fastapi uvicorn flask django \
-            tqdm colorama python-dotenv pyyaml \
-            sqlalchemy pymongo redis \
-            pillow opencv-python
+          python -m pip install --upgrade pip
+          pip install selenium playwright lxml
 
-      - name: Install Playwright Browsers and System Deps
+      - name: Install Playwright Browsers
         run: |
           npx playwright install --with-deps
 
       - name: Start Tmate Session
         uses: mxschmitt/action-tmate@v3
-        if: always() # Ensures the session starts even if an install step fails
         with:
+          limit-access-to-actor: true
           limit-access-to-actor: true
           
