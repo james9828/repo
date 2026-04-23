@@ -1,4 +1,4 @@
-name: LLaMA API (hf + cloudflared)
+name: LLaMA API (hf + cloudflared stable)
 
 on:
   workflow_dispatch:
@@ -12,39 +12,59 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y wget tar
+          sudo apt install -y wget tar findutils
 
-      - name: Download llama.cpp binary
+      - name: Download llama.cpp binary (fixed version)
         run: |
-          wget https://github.com/ggml-org/llama.cpp/releases/download/b8892/llama-b8892-bin-ubuntu-x64.tar.gz
-          tar -xzf llama-b8892-bin-ubuntu-x64.tar.gz
+          wget -O llama.tar.gz \
+            https://github.com/ggml-org/llama.cpp/releases/download/b8892/llama-b8892-bin-ubuntu-x64.tar.gz
+          tar -xzf llama.tar.gz
 
-      - name: Find server binary
+          echo "=== FILE TREE ==="
+          find . -maxdepth 3 -type f | sed 's#^\./##'
+
+      - name: Locate llama-server
         run: |
-          SERVER=$(find . -name llama-server | head -n 1)
-          echo "SERVER=$SERVER" >> $GITHUB_ENV
+          SERVER=$(find . -type f -name llama-server | head -n 1)
+          if [ -z "$SERVER" ]; then
+            echo "Server binary not found"
+            exit 1
+          fi
+
           chmod +x "$SERVER"
+          echo "SERVER=$SERVER" >> $GITHUB_ENV
+          echo "Using: $SERVER"
 
-      - name: Install cloudflared
+      - name: Install cloudflared (proper naming)
         run: |
-          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          wget -O cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared
 
       - name: Run server + tunnel
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # start server with HF model
-          $SERVER -hf HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive:Q4_K_M \
-                  -c 2048 --port 8080 --host 0.0.0.0 &
+          # Start LLaMA server using HF model shortcut
+          $SERVER \
+            -hf HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive:Q4_K_M \
+            -c 2048 \
+            --port 8080 \
+            --host 0.0.0.0 \
+            > server.log 2>&1 &
 
-          sleep 10
+          sleep 12
 
+          echo "Starting tunnel..."
           ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
-          sleep 10
+
+          sleep 12
 
           echo "=== PUBLIC URL ==="
           grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
           echo "=================="
+
+          echo "=== SERVER LOG ==="
+          tail -n 50 server.log || true
 
           wait
