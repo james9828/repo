@@ -1,4 +1,4 @@
-name: LLaMA API (fixed binary + cloudflared)
+name: Public LLaMA API (fixed tar + cloudflared)
 
 on:
   workflow_dispatch:
@@ -12,29 +12,43 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y wget tar
+          sudo apt install -y wget tar findutils
 
-      - name: Download llama.cpp binary (fixed)
+      - name: Download llama.cpp binary
         run: |
-          wget https://github.com/ggml-org/llama.cpp/releases/download/b8892/llama-b8892-bin-ubuntu-x64.tar.gz
+          wget -O llama-b8892-bin-ubuntu-x64.tar.gz \
+            https://github.com/ggml-org/llama.cpp/releases/download/b8892/llama-b8892-bin-ubuntu-x64.tar.gz
           tar -xzf llama-b8892-bin-ubuntu-x64.tar.gz
-          chmod +x llama-server llama-cli
+          echo "Extracted files:"
+          find . -maxdepth 3 -type f | sed 's#^\./##' | sort
+
+      - name: Locate llama-server
+        run: |
+          SERVER_PATH="$(find . -type f -name 'llama-server' | head -n 1)"
+          if [ -z "$SERVER_PATH" ]; then
+            echo "llama-server not found after extraction"
+            exit 1
+          fi
+          echo "SERVER_PATH=$SERVER_PATH" >> "$GITHUB_ENV"
+          chmod +x "$SERVER_PATH"
+          echo "Using: $SERVER_PATH"
 
       - name: Download model
         run: |
           mkdir -p models
-          cd models
-          wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-GGUF/resolve/main/tinyllama-1.1b-chat.Q4_K_M.gguf
+          wget -O models/model.gguf \
+            https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-GGUF/resolve/main/tinyllama-1.1b-chat.Q4_K_M.gguf
 
       - name: Install cloudflared
         run: |
-          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          wget -O cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared
 
       - name: Run server + tunnel
         run: |
-          ./llama-server -m models/tinyllama-1.1b-chat.Q4_K_M.gguf -c 2048 --port 8080 &
-          sleep 5
+          "$SERVER_PATH" -m models/model.gguf -c 2048 --port 8080 --host 0.0.0.0 > server.log 2>&1 &
+          sleep 8
 
           ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
           sleep 10
@@ -43,4 +57,5 @@ jobs:
           grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
           echo "=================="
 
-          wait
+          echo "=== SERVER LOG ==="
+          tail -n 50 server.log || true
