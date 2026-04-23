@@ -1,31 +1,27 @@
-name: Build Python wheels
+name: System Info (MB/GB)
 
 on:
-  push:
   workflow_dispatch:
 
 jobs:
-  build:
+  info:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Show RAM and Storage in MB/GB
+        run: |
+          echo "=== RAM ==="
+          free -m | awk '/Mem:/ {
+            printf "Total: %.2f GB (%.0f MB)\n", $2/1024, $2;
+            printf "Used:  %.2f GB (%.0f MB)\n", $3/1024, $3;
+            printf "Free:  %.2f GB (%.0f MB)\n", $4/1024, $4;
+          }'
 
-      - name: Setup Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: pip install build
-
-      - name: Run install.py
-        run: python install.py
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels
-          path: wheelhouse/*.whl
-          if-no-files-found: error
+          echo ""
+          echo "=== Disk (Root /) ==="
+          df -BM / | awk 'NR==2 {
+            totalMB=$2+0; usedMB=$3+0; freeMB=$4+0;
+            printf "Total: %.2f GB (%d MB)\n", totalMB/1024, totalMB;
+            printf "Used:  %.2f GB (%d MB)\n", usedMB/1024, usedMB;
+            printf "Free:  %.2f GB (%d MB)\n", freeMB/1024, freeMB;
+          }'
