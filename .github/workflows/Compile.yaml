@@ -1,32 +1,55 @@
-name: GPU Check
+name: Public LLaMA API (cloudflared)
 
 on:
   workflow_dispatch:
 
 jobs:
-  check:
+  run:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      - name: Check GPU / iGPU
+      - name: Install deps
         run: |
-          echo "=== LSPCI (GPU devices) ==="
-          lspci | grep -i -E "vga|3d|2d" || echo "No GPU found"
+          sudo apt update
+          sudo apt install -y build-essential cmake git wget
 
-          echo ""
-          echo "=== OpenGL Renderer ==="
-          sudo apt update -y
-          sudo apt install -y mesa-utils
-          glxinfo | grep "OpenGL renderer" || echo "No OpenGL info"
+      - name: Clone llama.cpp
+        run: |
+          git clone https://github.com/ggerganov/llama.cpp
+          cd llama.cpp
+          make -j$(nproc)
 
-          echo ""
-          echo "=== NVIDIA Check ==="
-          nvidia-smi || echo "No NVIDIA GPU"
+      - name: Download model
+        run: |
+          mkdir -p models
+          cd models
+          wget https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/resolve/main/gemma-4-e4b.Q4_K_M.gguf
 
-          echo ""
-          echo "=== CPU Info ==="
-          lscpu | grep "Model name"
+      - name: Install cloudflared
+        run: |
+          wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
 
-          echo ""
-          echo "=== /dev/dri (iGPU hint) ==="
-          ls /dev/dri || echo "No iGPU devices"
+      - name: Run server + tunnel
+        run: |
+          cd llama.cpp
+
+          # Start llama server
+          ./server -m ../models/gemma-4-e4b.Q4_K_M.gguf -c 2048 --port 8080 &
+          sleep 5
+
+          echo "Starting tunnel..."
+
+          # Start tunnel and capture URL
+          ../cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+
+          sleep 8
+
+          echo "=== PUBLIC URL ==="
+          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
+          
+          echo "=================="
+
+          # Keep job alive
+          wait
