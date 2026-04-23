@@ -18,7 +18,8 @@ jobs:
         run: |
           git clone https://github.com/ggerganov/llama.cpp
           cd llama.cpp
-          make -j$(nproc)
+          cmake -B build
+          cmake --build build --config Release -j$(nproc)
 
       - name: Download model
         run: |
@@ -35,6 +36,20 @@ jobs:
         run: |
           cd llama.cpp
 
+          # Start server (new binary path)
+          ./build/bin/server -m ../models/gemma-4-e4b.Q4_K_M.gguf -c 2048 --port 8080 &
+          sleep 5
+
+          echo "Starting tunnel..."
+
+          ../cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          sleep 10
+
+          echo "=== PUBLIC URL ==="
+          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
+          echo "=================="
+
+          wait
           # Start llama server
           ./server -m ../models/gemma-4-e4b.Q4_K_M.gguf -c 2048 --port 8080 &
           sleep 5
