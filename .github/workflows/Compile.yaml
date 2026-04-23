@@ -1,4 +1,4 @@
-name: LLaMA API (apt + cloudflared)
+name: LLaMA API (fixed binary + cloudflared)
 
 on:
   workflow_dispatch:
@@ -9,10 +9,16 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Install llama.cpp + deps
+      - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y llama.cpp wget
+          sudo apt install -y wget tar
+
+      - name: Download llama.cpp binary (fixed)
+        run: |
+          wget https://github.com/ggml-org/llama.cpp/releases/download/b8892/llama-b8892-bin-ubuntu-x64.tar.gz
+          tar -xzf llama-b8892-bin-ubuntu-x64.tar.gz
+          chmod +x llama-server llama-cli
 
       - name: Download model
         run: |
@@ -27,8 +33,7 @@ jobs:
 
       - name: Run server + tunnel
         run: |
-          # binary names from apt package
-          llama-server -m models/tinyllama-1.1b-chat.Q4_K_M.gguf -c 2048 --port 8080 &
+          ./llama-server -m models/tinyllama-1.1b-chat.Q4_K_M.gguf -c 2048 --port 8080 &
           sleep 5
 
           ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
@@ -38,46 +43,4 @@ jobs:
           grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
           echo "=================="
 
-          wait          sleep 5
-
-          ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
-          sleep 10
-
-          echo "=== PUBLIC URL ==="
-          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
-          echo "=================="
-
-          wait          cd llama.cpp
-
-          # Start server (new binary path)
-          ./build/bin/server -m ../models/gemma-4-e4b.Q4_K_M.gguf -c 2048 --port 8080 &
-          sleep 5
-
-          echo "Starting tunnel..."
-
-          ../cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
-          sleep 10
-
-          echo "=== PUBLIC URL ==="
-          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
-          echo "=================="
-
-          wait
-          # Start llama server
-          ./server -m ../models/gemma-4-e4b.Q4_K_M.gguf -c 2048 --port 8080 &
-          sleep 5
-
-          echo "Starting tunnel..."
-
-          # Start tunnel and capture URL
-          ../cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
-
-          sleep 8
-
-          echo "=== PUBLIC URL ==="
-          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
-          
-          echo "=================="
-
-          # Keep job alive
           wait
