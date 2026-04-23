@@ -1,4 +1,4 @@
-name: Public LLaMA API (cloudflared)
+name: LLaMA API (prebuilt + cloudflared)
 
 on:
   workflow_dispatch:
@@ -12,20 +12,19 @@ jobs:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y build-essential cmake git wget
+          sudo apt install -y wget unzip
 
-      - name: Clone llama.cpp
+      - name: Download llama.cpp prebuilt
         run: |
-          git clone https://github.com/ggerganov/llama.cpp
-          cd llama.cpp
-          cmake -B build
-          cmake --build build --config Release -j$(nproc)
+          wget https://github.com/ggml-org/llama.cpp/releases/latest/download/llama-binaries-linux-x64.zip
+          unzip llama-binaries-linux-x64.zip
+          chmod +x llama-cli llama-server
 
-      - name: Download model
+      - name: Download model (working one)
         run: |
           mkdir -p models
           cd models
-          wget https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/resolve/main/gemma-4-e4b.Q4_K_M.gguf
+          wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-GGUF/resolve/main/tinyllama-1.1b-chat.Q4_K_M.gguf
 
       - name: Install cloudflared
         run: |
@@ -34,7 +33,17 @@ jobs:
 
       - name: Run server + tunnel
         run: |
-          cd llama.cpp
+          ./llama-server -m models/tinyllama-1.1b-chat.Q4_K_M.gguf -c 2048 --port 8080 &
+          sleep 5
+
+          ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          sleep 10
+
+          echo "=== PUBLIC URL ==="
+          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
+          echo "=================="
+
+          wait          cd llama.cpp
 
           # Start server (new binary path)
           ./build/bin/server -m ../models/gemma-4-e4b.Q4_K_M.gguf -c 2048 --port 8080 &
