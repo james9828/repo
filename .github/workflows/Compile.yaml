@@ -50,40 +50,34 @@ jobs:
 
       - name: Configure Android Paths
         run: |
-          echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
-          echo "SYSROOT=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
-          echo "CC_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
-          echo "CXX_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++" >> $GITHUB_ENV
-          echo "AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=$TOOLCHAIN/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=$TOOLCHAIN/bin/aarch64-linux-android33-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
 
-      - name: Configure rust-lld with NDK libs
+      - name: Configure Cargo for Android target
         run: |
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           mkdir -p .cargo
-          TOOLCHAIN_PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-          cat > .cargo/config.toml <<EOF
-          [target.aarch64-linux-android]
-          linker = "rust-lld"
-          rustflags = [
-            "-Lnative=${TOOLCHAIN_PATH}/sysroot/usr/lib/aarch64-linux-android/33",
-            "-Lnative=${TOOLCHAIN_PATH}/sysroot/usr/lib/aarch64-linux-android",
-            "-Lnative=${TOOLCHAIN_PATH}/lib64/clang/19/lib/linux/aarch64",
-            "-Lnative=$ANDROID_NDK_HOME/sources/cxx-stl/llvm-libc++/libs/arm64-v8a"
-          ]
-          EOF
+          # Use the clang linker wrapper — it automatically resolves all NDK sysroot libs
+          printf '[target.aarch64-linux-android]\nlinker = "%s/bin/aarch64-linux-android33-clang"\n' "$TOOLCHAIN" > .cargo/config.toml
+          cat .cargo/config.toml
 
       - name: Build Lune
         env:
-          RUSTFLAGS: -C lto=off -C link-arg=-lc++_static
+          RUSTFLAGS: -C lto=off
         run: |
           cargo build --release --target aarch64-linux-android -j2
 
       - name: Strip Binary
         run: |
-          $TOOLCHAIN/bin/llvm-strip target/aarch64-linux-android/release/lune || true
+          "$TOOLCHAIN/bin/llvm-strip" target/aarch64-linux-android/release/lune || true
 
       - name: Show Output
         run: |
-          ls -lah target/aarch64-linux-android/release/
+          ls -lah target/aarch64-linux-android/release/lune
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
