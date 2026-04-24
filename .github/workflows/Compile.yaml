@@ -57,12 +57,29 @@ jobs:
           echo "AR_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
           echo "RANLIB_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
 
-      - name: Configure Cargo for Android target
+      - name: Create linker wrapper script
         run: |
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          SYSROOT="$TOOLCHAIN/sysroot"
+          RUSTLD="$(rustup which --toolchain stable rust-lld 2>/dev/null || find ~/.rustup -name 'rust-lld' | head -1)"
+
+          mkdir -p "$HOME/.android-linker"
+          cat > "$HOME/.android-linker/aarch64-linux-android-ld" <<SCRIPT
+          #!/bin/bash
+          exec "$RUSTLD" -flavor gnu \
+            --sysroot="$SYSROOT" \
+            -L"$SYSROOT/usr/lib/aarch64-linux-android/33" \
+            -L"$SYSROOT/usr/lib/aarch64-linux-android" \
+            -L"$TOOLCHAIN/lib64/clang/19/lib/linux/aarch64" \
+            "\$@"
+          SCRIPT
+          chmod +x "$HOME/.android-linker/aarch64-linux-android-ld"
+          echo "ANDROID_LINKER=$HOME/.android-linker/aarch64-linux-android-ld" >> $GITHUB_ENV
+
+      - name: Configure Cargo for Android target
+        run: |
           mkdir -p .cargo
-          # Use the clang linker wrapper — it automatically resolves all NDK sysroot libs
-          printf '[target.aarch64-linux-android]\nlinker = "%s/bin/aarch64-linux-android33-clang"\n' "$TOOLCHAIN" > .cargo/config.toml
+          printf '[target.aarch64-linux-android]\nlinker = "%s"\n' "$ANDROID_LINKER" > .cargo/config.toml
           cat .cargo/config.toml
 
       - name: Build Lune
