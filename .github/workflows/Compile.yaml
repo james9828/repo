@@ -1,70 +1,69 @@
-name: LLaMA API (hf + cloudflared stable)
+name: Build Lune Android
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
 
 jobs:
-  run:
+  build-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
 
     steps:
-      - name: Install deps
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: lune-org/lune
+          fetch-depth: 0
+
+      - name: Install system packages
         run: |
           sudo apt update
-          sudo apt install -y wget tar findutils
+          sudo apt install -y git unzip wget curl build-essential pkg-config cmake ninja-build python3
 
-      - name: Download llama.cpp binary (fixed version)
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK
         run: |
-          wget -O llama.tar.gz \
-            https://github.com/ggml-org/llama.cpp/releases/download/b8892/llama-b8892-bin-ubuntu-x64.tar.gz
-          tar -xzf llama.tar.gz
+          cd $HOME
+          wget -O ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r27c" >> $GITHUB_ENV
 
-          echo "=== FILE TREE ==="
-          find . -maxdepth 3 -type f | sed 's#^\./##'
-
-      - name: Locate llama-server
+      - name: Configure Android toolchain (API 33)
         run: |
-          SERVER=$(find . -type f -name llama-server | head -n 1)
-          if [ -z "$SERVER" ]; then
-            echo "Server binary not found"
-            exit 1
-          fi
+          echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
 
-          chmod +x "$SERVER"
-          echo "SERVER=$SERVER" >> $GITHUB_ENV
-          echo "Using: $SERVER"
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install cloudflared (proper naming)
-        run: |
-          wget -O cloudflared \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-          chmod +x cloudflared
-
-      - name: Run server + tunnel
+      - name: Build Lune for Android
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          RUSTFLAGS: -C lto=off
         run: |
-          # Start LLaMA server using HF model shortcut
-          $SERVER \
-            -hf HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive:Q4_K_M \
-            -c 2048 \
-            --port 8080 \
-            --host 0.0.0.0 \
-            > server.log 2>&1 &
+          cargo build --release --target aarch64-linux-android -j2
 
-          sleep 12
+      - name: Strip binary
+        run: |
+          $TOOLCHAIN/bin/llvm-strip target/aarch64-linux-android/release/lune || true
 
-          echo "Starting tunnel..."
-          ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
-
-          sleep 12
-
-          echo "=== PUBLIC URL ==="
-          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1
-          echo "=================="
-
-          echo "=== SERVER LOG ==="
-          tail -n 50 server.log || true
-
-          wait
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lune-android-aarch64-api33
+          path: target/aarch64-linux-android/release/lune
