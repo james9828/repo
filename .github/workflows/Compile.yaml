@@ -31,9 +31,9 @@ jobs:
       - name: Install Android NDK
         run: |
           cd $HOME
-          wget -O ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          wget -O ndk.zip https://dl.google.com/android/repository/android-ndk-r28-linux.zip
           unzip -q ndk.zip
-          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r27c" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-r28" >> $GITHUB_ENV
 
       - name: Configure Android toolchain (API 33)
         run: |
