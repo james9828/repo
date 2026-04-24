@@ -21,16 +21,9 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-            git \
-            curl \
-            wget \
-            unzip \
-            zip \
-            build-essential \
-            pkg-config \
-            cmake \
-            ninja-build \
-            python3
+            git curl wget unzip zip \
+            build-essential pkg-config \
+            cmake ninja-build python3
 
       - name: Setup Latest Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,19 +48,24 @@ jobs:
           unzip -q ndk.zip
           echo "ANDROID_NDK_HOME=$HOME/android-ndk-r28" >> $GITHUB_ENV
 
-      - name: Configure Android Toolchain
+      - name: Configure Android Paths
         run: |
           echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+          echo "SYSROOT=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot" >> $GITHUB_ENV
           echo "CC_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
           echo "CXX_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++" >> $GITHUB_ENV
           echo "AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
 
-      - name: Configure rust-lld Linker
+      - name: Configure rust-lld with NDK libs
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml <<EOF
           [target.aarch64-linux-android]
           linker = "rust-lld"
+          rustflags = [
+            "-Lnative=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/33",
+            "-Lnative=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/19/lib/linux/aarch64"
+          ]
           EOF
 
       - name: Build Lune
