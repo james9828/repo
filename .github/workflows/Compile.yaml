@@ -1,4 +1,4 @@
-name: Build Lune Android
+name: Build Lune Android API33
 
 on:
   workflow_dispatch:
@@ -12,29 +12,78 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Lune Repository
         uses: actions/checkout@v4
         with:
           repository: lune-org/lune
           fetch-depth: 0
 
-      - name: Install system packages
+      - name: Install System Packages
         run: |
           sudo apt update
-          sudo apt install -y git unzip wget curl build-essential pkg-config cmake ninja-build python3
+          sudo apt install -y \
+            git \
+            curl \
+            wget \
+            unzip \
+            zip \
+            pkg-config \
+            build-essential \
+            cmake \
+            ninja-build \
+            python3
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust 1.82.0
+        uses: dtolnay/rust-toolchain@1.82.0
         with:
           targets: aarch64-linux-android
 
-      - name: Install Android NDK
+      - name: Cache Cargo Registry + Git + Target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-lune-rust182-ndkr28-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Download Android NDK r28
         run: |
           cd $HOME
-          wget -O ndk.zip https://dl.google.com/android/repository/android-ndk-r28-linux.zip
+          wget -q -O ndk.zip https://dl.google.com/android/repository/android-ndk-r28-linux.zip
           unzip -q ndk.zip
           echo "ANDROID_NDK_HOME=$HOME/android-ndk-r28" >> $GITHUB_ENV
 
+      - name: Configure Android Toolchain API 33
+        run: |
+          echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang" >> $GITHUB_ENV
+
+      - name: Clean Previous Builds
+        run: cargo clean
+
+      - name: Build Lune for Android
+        env:
+          RUSTFLAGS: -C lto=off
+        run: |
+          cargo build --release --target aarch64-linux-android -j2
+
+      - name: Strip Binary
+        run: |
+          $TOOLCHAIN/bin/llvm-strip target/aarch64-linux-android/release/lune || true
+
+      - name: Verify Output
+        run: |
+          ls -lah target/aarch64-linux-android/release/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lune-android-aarch64-api33
+          path: target/aarch64-linux-android/release/lune
       - name: Configure Android toolchain (API 33)
         run: |
           echo "TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
