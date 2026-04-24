@@ -59,18 +59,21 @@ jobs:
       - name: Configure rust-lld with NDK libs
         run: |
           mkdir -p .cargo
+          TOOLCHAIN_PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           cat > .cargo/config.toml <<EOF
           [target.aarch64-linux-android]
           linker = "rust-lld"
           rustflags = [
-            "-Lnative=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/33",
-            "-Lnative=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/19/lib/linux/aarch64"
+            "-Lnative=${TOOLCHAIN_PATH}/sysroot/usr/lib/aarch64-linux-android/33",
+            "-Lnative=${TOOLCHAIN_PATH}/sysroot/usr/lib/aarch64-linux-android",
+            "-Lnative=${TOOLCHAIN_PATH}/lib64/clang/19/lib/linux/aarch64",
+            "-Lnative=$ANDROID_NDK_HOME/sources/cxx-stl/llvm-libc++/libs/arm64-v8a"
           ]
           EOF
 
       - name: Build Lune
         env:
-          RUSTFLAGS: -C lto=off
+          RUSTFLAGS: -C lto=off -C link-arg=-lc++_static
         run: |
           cargo build --release --target aarch64-linux-android -j2
 
