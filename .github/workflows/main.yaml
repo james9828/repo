@@ -21,10 +21,8 @@ jobs:
           sudo mv ngrok /usr/local/bin/ngrok
 
       - name: Start ngrok TCP tunnel
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          ngrok config add-authtoken "$NGROK_AUTHTOKEN"
+          ngrok config add-authtoken "33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN"
           nohup ngrok tcp 22 >/tmp/ngrok.log 2>&1 &
           sleep 12
           cat /tmp/ngrok.log || true
