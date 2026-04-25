@@ -11,26 +11,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python packages
-        run: pip install lxml playwright selenium
-
-      - name: Install Playwright browsers
-        run: playwright install --with-deps
-
-      - name: Install tmate
+      - name: Install SSH + ngrok
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y tmate
+          sudo apt-get update
+          sudo apt-get install -y openssh-server curl jq
+          sudo mkdir -p /run/sshd
+          echo "runner:runner" | sudo chpasswd
+          sudo service ssh start
 
-      - name: Start tmate session
+          curl -sSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o ngrok.tgz
+          tar -xzf ngrok.tgz
+          sudo mv ngrok /usr/local/bin/
+
+      - name: Start ngrok TCP
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
-          tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'
-          tmate -S /tmp/tmate.sock display -p '#{tmate_web}'
-          sleep infinity
+          ngrok config add-authtoken "$33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN"
+          nohup ngrok tcp 22 >/dev/null 2>&1 &
+          sleep 10
+
+      - name: Grab SSH TCP Session
+        run: |
+          ENDPOINT=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="tcp") | .public_url')
+          HOST=$(echo $ENDPOINT | sed 's/tcp:\/\///' | cut -d: -f1)
+          PORT=$(echo $ENDPOINT | cut -d: -f3)
+
+          echo "======================="
+          echo "SSH HOST: $HOST"
+          echo "SSH PORT: $PORT"
+          echo "USER: runner"
+          echo "PASS: runner"
+          echo "CONNECT:"
+          echo "ssh runner@$HOST -p $PORT"
+          echo "======================="
+
+      - name: Keep Alive
+        run: sleep infinity
