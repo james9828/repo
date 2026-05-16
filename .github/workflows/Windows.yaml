@@ -21,7 +21,8 @@ jobs:
           Get-Service sshd
 
           # Set password for existing user
-          net user runneradmin runner
+          # Set strong password (REQUIRED)
+          net user runneradmin "Runner@123456"
 
           # Allow SSH through firewall
           New-NetFirewallRule -Name sshd -DisplayName "OpenSSH Server" `
