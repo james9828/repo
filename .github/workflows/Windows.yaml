@@ -8,59 +8,57 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Install OpenSSH Server + ngrok
+      - name: Setup SSH + ngrok
         shell: powershell
         run: |
-          # Install OpenSSH Server
+          # Install SSH
           Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
           Start-Service sshd
           Set-Service -Name sshd -StartupType Automatic
 
-          # Confirm service
-          Start-Sleep -Seconds 3
-          Get-Service sshd
-
-          # Set password for existing user
-          # Set strong password (REQUIRED)
+          # Strong password
           net user runneradmin "Runner@123456"
 
-          # Allow SSH through firewall
-          New-NetFirewallRule -Name sshd -DisplayName "OpenSSH Server" `
-            -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+          # Firewall rule
+          New-NetFirewallRule -Name sshd `
+            -DisplayName "OpenSSH Server" `
+            -Enabled True `
+            -Direction Inbound `
+            -Protocol TCP `
+            -Action Allow `
+            -LocalPort 22
 
           # Download ngrok
           Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
           Expand-Archive ngrok.zip -Force
+          $ngrok = Get-ChildItem -Recurse -Filter ngrok.exe | Select-Object -First 1
+          Move-Item $ngrok.FullName C:\Windows\System32\ngrok.exe
 
-          # Locate ngrok.exe properly
-          $ngrokPath = Get-ChildItem -Recurse -Filter ngrok.exe | Select-Object -First 1
-          Move-Item $ngrokPath.FullName C:\Windows\System32\ngrok.exe
-
-      - name: Start ngrok TCP tunnel
+      - name: Start ngrok + get endpoint (NO API)
         shell: powershell
         run: |
+          # YOUR TOKEN (used directly)
           ngrok config add-authtoken "33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN"
-          Start-Process -NoNewWindow -FilePath "ngrok" -ArgumentList "tcp 22"
-          Start-Sleep -Seconds 12
 
-      - name: Grab SSH TCP Session
-        shell: powershell
-        run: |
-          $endpoint = $null
+          # Start ngrok and log output
+          Start-Process -FilePath "ngrok" `
+            -ArgumentList "tcp 22" `
+            -RedirectStandardOutput "ngrok.log" `
+            -RedirectStandardError "ngrok.log" `
+            -NoNewWindow
 
-          for ($i=0; $i -lt 15; $i++) {
-            try {
-              $resp = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
-              $endpoint = ($resp.tunnels | Where-Object { $_.proto -eq "tcp" }).public_url
-            } catch {}
+          # Wait for startup
+          Start-Sleep -Seconds 15
 
-            if ($endpoint) { break }
-            Start-Sleep -Seconds 2
-          }
+          # Read log and extract tcp address
+          $log = Get-Content ngrok.log -Raw
 
-          if (-not $endpoint) {
-            Write-Host "Failed to get ngrok endpoint"
-            exit 1
+          if ($log -match "tcp://[0-9a-zA-Z\.\-]+:\d+") {
+            $endpoint = $matches[0]
+          } else {
+            Write-Host "==== NGROK LOG ===="
+            Write-Host $log
+            throw "Failed to find ngrok TCP endpoint"
           }
 
           $endpoint = $endpoint -replace "tcp://", ""
@@ -72,7 +70,7 @@ jobs:
           echo "SSH HOST: $host"
           echo "SSH PORT: $port"
           echo "USER: runneradmin"
-          echo "PASS: runner"
+          echo "PASS: Runner@123456"
           echo "CONNECT:"
           echo "ssh runneradmin@$host -p $port"
           echo "======================="
