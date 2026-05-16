@@ -39,7 +39,7 @@ jobs:
       - name: Start ngrok TCP tunnel
         shell: powershell
         run: |
-          ngrok config add-authtoken "YOUR_NGROK_TOKEN_HERE"
+          ngrok config add-authtoken "33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN"
           Start-Process -NoNewWindow -FilePath "ngrok" -ArgumentList "tcp 22"
           Start-Sleep -Seconds 12
 
