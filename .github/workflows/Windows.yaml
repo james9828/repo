@@ -14,31 +14,33 @@ jobs:
           # Install OpenSSH Server
           Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
           Start-Service sshd
-          Set-Service -Name sshd -StartupType 'Automatic'
+          Set-Service -Name sshd -StartupType Automatic
 
-          # Set password for runner user
-          net user runner runner
+          # Confirm service
+          Start-Sleep -Seconds 3
+          Get-Service sshd
+
+          # Set password for existing user
+          net user runneradmin runner
 
           # Allow SSH through firewall
-          New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' `
+          New-NetFirewallRule -Name sshd -DisplayName "OpenSSH Server" `
             -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
 
-          # Download ngrok (zip for Windows)
+          # Download ngrok
           Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-          Expand-Archive ngrok.zip
-          Move-Item ngrok.exe C:\Windows\System32\ngrok.exe
+          Expand-Archive ngrok.zip -Force
+
+          # Locate ngrok.exe properly
+          $ngrokPath = Get-ChildItem -Recurse -Filter ngrok.exe | Select-Object -First 1
+          Move-Item $ngrokPath.FullName C:\Windows\System32\ngrok.exe
 
       - name: Start ngrok TCP tunnel
         shell: powershell
         run: |
-          ngrok config add-authtoken "YOUR_TOKEN_HERE"
+          ngrok config add-authtoken "YOUR_NGROK_TOKEN_HERE"
           Start-Process -NoNewWindow -FilePath "ngrok" -ArgumentList "tcp 22"
-
           Start-Sleep -Seconds 12
-
-          try {
-            Get-Content "$env:LOCALAPPDATA\ngrok\ngrok.log"
-          } catch {}
 
       - name: Grab SSH TCP Session
         shell: powershell
@@ -55,6 +57,11 @@ jobs:
             Start-Sleep -Seconds 2
           }
 
+          if (-not $endpoint) {
+            Write-Host "Failed to get ngrok endpoint"
+            exit 1
+          }
+
           $endpoint = $endpoint -replace "tcp://", ""
           $parts = $endpoint.Split(":")
           $host = $parts[0]
@@ -63,10 +70,10 @@ jobs:
           echo "======================="
           echo "SSH HOST: $host"
           echo "SSH PORT: $port"
-          echo "USER: runner"
+          echo "USER: runneradmin"
           echo "PASS: runner"
           echo "CONNECT:"
-          echo "ssh runner@$host -p $port"
+          echo "ssh runneradmin@$host -p $port"
           echo "======================="
 
       - name: Keep Alive
