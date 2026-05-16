@@ -1,0 +1,75 @@
+name: Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: windows-latest
+
+    steps:
+      - name: Install OpenSSH Server + ngrok
+        shell: powershell
+        run: |
+          # Install OpenSSH Server
+          Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+          Start-Service sshd
+          Set-Service -Name sshd -StartupType 'Automatic'
+
+          # Set password for runner user
+          net user runner runner
+
+          # Allow SSH through firewall
+          New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' `
+            -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+
+          # Download ngrok (zip for Windows)
+          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip
+          Move-Item ngrok.exe C:\Windows\System32\ngrok.exe
+
+      - name: Start ngrok TCP tunnel
+        shell: powershell
+        run: |
+          ngrok config add-authtoken "YOUR_TOKEN_HERE"
+          Start-Process -NoNewWindow -FilePath "ngrok" -ArgumentList "tcp 22"
+
+          Start-Sleep -Seconds 12
+
+          try {
+            Get-Content "$env:LOCALAPPDATA\ngrok\ngrok.log"
+          } catch {}
+
+      - name: Grab SSH TCP Session
+        shell: powershell
+        run: |
+          $endpoint = $null
+
+          for ($i=0; $i -lt 15; $i++) {
+            try {
+              $resp = Invoke-RestMethod http://127.0.0.1:4040/api/tunnels
+              $endpoint = ($resp.tunnels | Where-Object { $_.proto -eq "tcp" }).public_url
+            } catch {}
+
+            if ($endpoint) { break }
+            Start-Sleep -Seconds 2
+          }
+
+          $endpoint = $endpoint -replace "tcp://", ""
+          $parts = $endpoint.Split(":")
+          $host = $parts[0]
+          $port = $parts[1]
+
+          echo "======================="
+          echo "SSH HOST: $host"
+          echo "SSH PORT: $port"
+          echo "USER: runner"
+          echo "PASS: runner"
+          echo "CONNECT:"
+          echo "ssh runner@$host -p $port"
+          echo "======================="
+
+      - name: Keep Alive
+        shell: powershell
+        run: |
+          while ($true) { Start-Sleep -Seconds 60 }
