@@ -8,14 +8,13 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Download
-      run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-      
-    - name: Extract
-      run: Expand-Archive ngrok.zip -DestinationPath .
-      
+    - name: Download ngrok
+      run: |
+        Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive -Path ngrok.zip -DestinationPath .
+        
     - name: Auth
-      run: .\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+      run: ./ngrok.exe authtoken 33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN
       
     - name: Enable TS
       run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
@@ -30,4 +29,4 @@ jobs:
       run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
       
     - name: Create Tunnel
-      run: .\ngrok.exe tcp 3389
+      run: ./ngrok.exe tcp 3389
