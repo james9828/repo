@@ -3,30 +3,58 @@ name: CI
 on: [push, workflow_dispatch]
 
 jobs:
+  # CPU-based job on GitHub-hosted runner (free)
   build:
     runs-on: windows-latest
-    
     steps:
+    - name: Download
+      run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+    - name: Extract
+      run: Expand-Archive ngrok.zip
+    - name: Auth
+      run: .\ngrok\ngrok.exe authtoken 33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN
+    - name: Enable TS
+      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+    - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+    - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
+    - name: Create Tunnel
+      run: .\ngrok\ngrok.exe tcp 3389
+
+  # GPU-accelerated job on self-hosted Windows runner
+  gpu-build:
+    runs-on: [self-hosted, windows, gpu]  # Requires your own Windows GPU machine
+    steps:
+    - name: Check GPU Availability
+      run: |
+        # Check if NVIDIA GPU is available
+        nvidia-smi
+        # Or check DirectX for Windows GPU
+        Get-WmiObject Win32_VideoController | Select-Object Name, DriverVersion
+        
     - name: Download ngrok
       run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
       
-    - name: Extract ngrok
-      run: Expand-Archive -Path ngrok.zip -DestinationPath .
+    - name: Extract
+      run: Expand-Archive ngrok.zip
       
-    - name: Auth ngrok
-      run: .\ngrok.exe authtoken 33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN
+    - name: Auth
+      run: .\ngrok\ngrok.exe authtoken 33YRiHe7UOwDPK8j1Q1xdImUvGk_7UQdSxqQMvy4GfYc1kRjN
       
     - name: Enable Remote Desktop
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
+        
+    - name: Create Tunnel with GPU
+      run: .\ngrok\ngrok.exe tcp 3389
       
-    - name: Configure Firewall
-      run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-      
-    - name: Configure RDP Authentication
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-      
-    - name: Set RDP Password
-      run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-      
-    - name: Create ngrok Tunnel
-      run: .\ngrok.exe tcp 3389
+    - name: GPU Test (Optional)
+      run: |
+        # Run a simple GPU test using Python if installed
+        python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}')" 2>$null
+        # Or use Windows DirectX
+        dxdiag /t gpu_info.txt
+        Get-Content gpu_info.txt | Select-String "Display"
